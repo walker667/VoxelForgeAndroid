@@ -1,0 +1,373 @@
+name: BUILD 3D VOXEL APK BIG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Create bigger 3D voxel Android project
+        run: |
+          rm -rf VoxelForge3D
+          mkdir -p VoxelForge3D/app/src/main/java/com/voxelforge/game
+          mkdir -p VoxelForge3D/app/src/main/res/values
+          mkdir -p VoxelForge3D/app/src/main/assets
+
+          cat > VoxelForge3D/settings.gradle <<'EOF2'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name='VoxelForge3D'
+          include ':app'
+          EOF2
+
+          cat > VoxelForge3D/build.gradle <<'EOF2'
+          plugins {
+              id 'com.android.application' version '8.12.2' apply false
+          }
+          EOF2
+
+          cat > VoxelForge3D/gradle.properties <<'EOF2'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          EOF2
+
+          cat > VoxelForge3D/app/build.gradle <<'EOF2'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'com.voxelforge.game'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.voxelforge.game'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 10
+                  versionName '2.0-3d-voxel-big'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF2
+
+          cat > VoxelForge3D/app/src/main/res/values/strings.xml <<'EOF2'
+          <resources><string name="app_name">Voxel Forge 3D</string></resources>
+          EOF2
+
+          cat > VoxelForge3D/app/src/main/res/values/styles.xml <<'EOF2'
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:windowActionBar">false</item>
+                  <item name="android:windowDisablePreview">true</item>
+              </style>
+          </resources>
+          EOF2
+
+          cat > VoxelForge3D/app/src/main/AndroidManifest.xml <<'EOF2'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application android:theme="@style/AppTheme" android:label="@string/app_name" android:allowBackup="false" android:usesCleartextTraffic="true">
+                  <activity android:name=".MainActivity" android:screenOrientation="landscape" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF2
+
+          cat > VoxelForge3D/app/src/main/java/com/voxelforge/game/MainActivity.java <<'EOF2'
+          package com.voxelforge.game;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.graphics.RectF;
+          import java.util.HashMap;
+          import java.util.Locale;
+          import java.util.Random;
+
+          public class MainActivity extends Activity {
+              VoxelView game;
+              @Override public void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                  game = new VoxelView(this);
+                  setContentView(game);
+              }
+              @Override protected void onPause() { if (game != null) game.save(); super.onPause(); }
+
+              public static class VoxelView extends View {
+                  final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  final HashMap<Long, Integer> edits = new HashMap<>();
+                  final Random random = new Random(7);
+                  final RectF play = new RectF(), set = new RectF(), breakBtn = new RectF(), placeBtn = new RectF(), jumpBtn = new RectF(), pauseBtn = new RectF();
+                  final String[] names = {"AIR", "GRASS", "DIRT", "STONE", "WOOD", "LEAF", "SAND", "WATER", "ORE", "TORCH"};
+                  final int[] hotbar = {1,2,3,4,5,6,8,9};
+                  SharedPreferences sp;
+                  float px = 3.5f, py = 3.5f, angle = 0.2f, velZ = 0, z = 1.65f;
+                  float joyX, joyY, hp = 20, hunger = 20, breakProgress = 0, day = 0.25f, sensitivity = 1.0f;
+                  boolean moving = false, paused = false, started = false, onGround = true, showHelp = true;
+                  int selected = 0, score = 0, lastW = 1, lastH = 1;
+                  long lastTime = 0;
+
+                  public VoxelView(Context ctx) {
+                      super(ctx);
+                      setFocusable(true);
+                      sp = ctx.getSharedPreferences("voxel3d", 0);
+                      px = sp.getFloat("px", px); py = sp.getFloat("py", py); angle = sp.getFloat("angle", angle);
+                      selected = sp.getInt("selected", 0); score = sp.getInt("score", 0);
+                      text.setTextAlign(Paint.Align.CENTER);
+                      text.setTypeface(android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD));
+                  }
+
+                  public void save() {
+                      sp.edit().putFloat("px", px).putFloat("py", py).putFloat("angle", angle).putInt("selected", selected).putInt("score", score).apply();
+                  }
+
+                  @Override protected void onDraw(Canvas canvas) {
+                      int w = Math.max(1, getWidth()), h = Math.max(1, getHeight()); lastW = w; lastH = h;
+                      long now = System.nanoTime();
+                      float dt = lastTime == 0 ? 0.016f : Math.min(0.05f, (now - lastTime) / 1000000000f);
+                      lastTime = now;
+                      if (started && !paused) update(dt);
+                      if (!started) drawMenu(canvas, w, h); else drawGame(canvas, w, h);
+                      invalidate();
+                  }
+
+                  void update(float dt) {
+                      day += dt / 240f; if (day > 1) day -= 1;
+                      hunger = Math.max(0, hunger - dt * 0.018f);
+                      if (hunger <= 0) hp = Math.max(0, hp - dt * 0.08f);
+                      if (moving) {
+                          float speed = (hunger > 0 ? 4.0f : 2.5f) * dt;
+                          float dx = (float)(Math.cos(angle) * joyY + Math.sin(angle) * joyX) * speed;
+                          float dy = (float)(Math.sin(angle) * joyY - Math.cos(angle) * joyX) * speed;
+                          move(dx, dy);
+                      }
+                      velZ -= 9.8f * dt;
+                      z += velZ * dt;
+                      if (z <= 1.65f) { if (velZ < -7) hp = Math.max(0, hp + velZ * 0.2f); z = 1.65f; velZ = 0; onGround = true; }
+                  }
+
+                  void move(float dx, float dy) {
+                      float nx = px + dx, ny = py + dy;
+                      if (!solid((int)Math.floor(nx), (int)Math.floor(py))) px = nx;
+                      if (!solid((int)Math.floor(px), (int)Math.floor(ny))) py = ny;
+                  }
+
+                  void drawMenu(Canvas c, int w, int h) {
+                      sky(c, w, h, 0.5f);
+                      p.setColor(Color.rgb(20, 28, 34)); c.drawRect(0, h/2f, w, h, p);
+                      for (int i=0;i<80;i++) {
+                          int x = (i*73)%w; int y = h/2 + ((i*41)%(Math.max(1,h/2)));
+                          p.setColor(blockColor(1 + (i%5), 0.7f));
+                          c.drawRect(x, y, x+42, y+42, p);
+                      }
+                      text.setColor(Color.WHITE); text.setTextSize(58); c.drawText("Voxel Forge 3D", w/2f, h*0.24f, text);
+                      text.setTextSize(23); text.setColor(Color.rgb(220,230,240)); c.drawText("Original block sandbox • Android APK • no copyrighted assets", w/2f, h*0.32f, text);
+                      play.set(w/2f-190, h*0.47f, w/2f+190, h*0.47f+82);
+                      button(c, play, "PLAY", Color.rgb(50, 150, 88), 26);
+                      set.set(w/2f-190, h*0.47f+105, w/2f+190, h*0.47f+178);
+                      button(c, set, "SETTINGS", Color.rgb(70, 90, 125), 22);
+                  }
+
+                  void drawGame(Canvas c, int w, int h) {
+                      float light = daylight();
+                      sky(c, w, h, light);
+                      p.setColor(Color.rgb((int)(45*light), (int)(88*light), (int)(58*light)));
+                      c.drawRect(0, h/2f, w, h, p);
+                      int rays = Math.max(120, Math.min(320, w/4));
+                      float fov = 1.12f;
+                      for (int i=0; i<rays; i++) {
+                          float rayAngle = angle + (i/(float)(rays-1) - 0.5f) * fov;
+                          Hit hit = ray(rayAngle, 26f);
+                          float sx0 = i * (w/(float)rays);
+                          float sx1 = (i+1) * (w/(float)rays) + 1;
+                          if (hit.hit) {
+                              float corrected = hit.dist * (float)Math.cos(rayAngle - angle);
+                              float wallH = (h * 0.86f) / Math.max(0.12f, corrected);
+                              float top = h/2f - wallH*(0.60f + (z-1.65f)*0.05f);
+                              float bottom = h/2f + wallH*0.55f;
+                              int col = shade(blockColor(hit.block, light), corrected, hit.side);
+                              p.setColor(col); c.drawRect(sx0, top, sx1, bottom, p);
+                              if (hit.block == 7) { p.setColor(Color.argb(95, 50, 130, 210)); c.drawRect(sx0, bottom-15, sx1, bottom+20, p); }
+                              if (i % 14 == 0) { p.setColor(Color.argb(55,0,0,0)); c.drawLine(sx0, top, sx0, bottom, p); }
+                          }
+                      }
+                      drawEntities(c,w,h,light);
+                      drawCrosshair(c,w,h);
+                      drawHud(c,w,h,light);
+                  }
+
+                  void sky(Canvas c, int w, int h, float light) {
+                      int r = (int)(35 + 90*light), g = (int)(55 + 130*light), b = (int)(95 + 135*light);
+                      p.setColor(Color.rgb(r,g,b)); c.drawRect(0,0,w,h/2f,p);
+                      float sunX = (day % 1f) * w; float sunY = h*0.18f + (float)Math.sin(day*6.283f)*h*0.08f;
+                      p.setColor(Color.rgb(255, 230, 120)); c.drawCircle(sunX, sunY, 34, p);
+                      p.setColor(Color.rgb(220, 220, 235)); c.drawCircle((sunX+w/2f)%w, h*0.16f, 22, p);
+                  }
+
+                  void drawEntities(Canvas c, int w, int h, float light) {
+                      for (int i=0;i<7;i++) {
+                          float ex = (i*8+5)%32 - 10, ey = (i*11+7)%32 - 10;
+                          float dx = ex - px, dy = ey - py;
+                          float dist = (float)Math.sqrt(dx*dx+dy*dy);
+                          if (dist < 2 || dist > 18) continue;
+                          float a = (float)Math.atan2(dy, dx) - angle;
+                          while (a < -Math.PI) a += Math.PI*2; while (a > Math.PI) a -= Math.PI*2;
+                          if (Math.abs(a) > 0.55f) continue;
+                          float sx = w/2f + (a/0.56f)*w/2f; float size = h/(dist*2f);
+                          p.setColor(i%2==0 ? Color.rgb(235,235,235) : Color.rgb(95,85,70));
+                          c.drawOval(sx-size*.35f, h/2f-size*.55f, sx+size*.35f, h/2f+size*.22f, p);
+                          p.setColor(Color.rgb(20,20,20)); c.drawCircle(sx-size*.12f,h/2f-size*.18f,3,p); c.drawCircle(sx+size*.12f,h/2f-size*.18f,3,p);
+                      }
+                  }
+
+                  void drawCrosshair(Canvas c, int w, int h) {
+                      p.setColor(Color.argb(210,255,255,255)); p.setStrokeWidth(3);
+                      c.drawLine(w/2f-14,h/2f,w/2f+14,h/2f,p); c.drawLine(w/2f,h/2f-14,w/2f,h/2f+14,p);
+                      p.setStrokeWidth(1);
+                  }
+
+                  void drawHud(Canvas c, int w, int h, float light) {
+                      p.setColor(Color.argb(150,0,0,0)); c.drawRect(0,0,w,72,p);
+                      bar(c, 20, 16, hp/20f, Color.rgb(220,55,55), "HP");
+                      bar(c, 20, 42, hunger/20f, Color.rgb(235,160,45), "FOOD");
+                      text.setTextSize(18); text.setColor(Color.WHITE); c.drawText("Seed 1337  X:"+(int)px+" Y:"+(int)py+"  Score:"+score, w/2f, 30, text);
+                      text.setTextSize(14); c.drawText("Drag right to look • Left joystick move • Break / Place blocks", w/2f, 55, text);
+
+                      p.setColor(Color.argb(190, 250,250,250)); c.drawCircle(105, h-105, 72, p);
+                      p.setColor(Color.rgb(55,70,85)); c.drawCircle(105 + joyX*48, h-105 + joyY*48, 28, p);
+
+                      breakBtn.set(w-285, h-102, w-185, h-25); placeBtn.set(w-165,h-102,w-65,h-25); jumpBtn.set(w-165,h-202,w-65,h-125); pauseBtn.set(w-80,20,w-20,70);
+                      button(c, breakBtn, "BREAK", Color.rgb(165,70,55), 16);
+                      button(c, placeBtn, "PLACE", Color.rgb(65,150,80), 16);
+                      button(c, jumpBtn, "JUMP", Color.rgb(70,105,170), 16);
+                      button(c, pauseBtn, paused?"▶":"Ⅱ", Color.rgb(60,65,75), 18);
+
+                      float startX = w/2f - 224; float y = h - 70;
+                      for (int i=0;i<hotbar.length;i++) {
+                          float x = startX + i*56;
+                          p.setColor(i==selected ? Color.rgb(255,235,115) : Color.argb(210,50,55,65));
+                          c.drawRoundRect(new RectF(x,y,x+48,y+48),8,8,p);
+                          p.setColor(blockColor(hotbar[i], 0.95f)); c.drawRect(x+10,y+10,x+38,y+38,p);
+                      }
+                      if (paused) { p.setColor(Color.argb(160,0,0,0)); c.drawRect(0,0,w,h,p); text.setTextSize(46); text.setColor(Color.WHITE); c.drawText("PAUSED",w/2f,h/2f,text); }
+                  }
+
+                  void bar(Canvas c, int x, int y, float v, int col, String label) {
+                      p.setColor(Color.rgb(45,45,50)); c.drawRect(x,y,x+150,y+18,p); p.setColor(col); c.drawRect(x,y,x+150*Math.max(0,Math.min(1,v)),y+18,p);
+                      text.setTextAlign(Paint.Align.LEFT); text.setColor(Color.WHITE); text.setTextSize(13); c.drawText(label,x+158,y+15,text); text.setTextAlign(Paint.Align.CENTER);
+                  }
+
+                  void button(Canvas c, RectF r, String s, int col, int size) {
+                      p.setColor(col); c.drawRoundRect(r,14,14,p); p.setColor(Color.argb(70,255,255,255)); c.drawRoundRect(r.left+4,r.top+4,r.right-4,r.top+12,10,10,p);
+                      text.setTextSize(size); text.setColor(Color.WHITE); c.drawText(s,r.centerX(),r.centerY()+size/3f,text);
+                  }
+
+                  @Override public boolean onTouchEvent(MotionEvent e) {
+                      int action = e.getActionMasked(); float x = e.getX(), y = e.getY();
+                      if (!started && action == MotionEvent.ACTION_DOWN) { if (play.contains(x,y)) { started = true; return true; } if (set.contains(x,y)) { sensitivity = sensitivity == 1f ? 1.6f : 1f; return true; } }
+                      if (!started) return true;
+                      if (action == MotionEvent.ACTION_DOWN) {
+                          if (pauseBtn.contains(x,y)) { paused = !paused; return true; }
+                          if (breakBtn.contains(x,y)) { breakBlock(); return true; }
+                          if (placeBtn.contains(x,y)) { placeBlock(); return true; }
+                          if (jumpBtn.contains(x,y)) { jump(); return true; }
+                          if (y > lastH-90 && Math.abs(x-lastW/2f) < 260) { selected = Math.max(0, Math.min(hotbar.length-1, (int)((x-(lastW/2f-224))/56))); return true; }
+                          moving = x < lastW*0.42f;
+                      } else if (action == MotionEvent.ACTION_MOVE) {
+                          if (moving && x < lastW*0.48f) { joyX = clamp((x-105)/72f); joyY = clamp((y-(lastH-105))/72f); }
+                          else { angle += (x - lastW/2f) * 0.000045f * sensitivity; }
+                      } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) { moving = false; joyX = 0; joyY = 0; }
+                      return true;
+                  }
+
+                  void jump() { if (onGround) { velZ = 5.8f; onGround = false; } }
+                  void breakBlock() { Hit h = ray(angle, 5f); if (h.hit) { edits.put(key(h.x,h.y), 0); score++; hunger = Math.max(0,hunger-0.08f); } }
+                  void placeBlock() { int bx = (int)Math.floor(px + Math.cos(angle)*2.2f); int by = (int)Math.floor(py + Math.sin(angle)*2.2f); if (!solid(bx,by)) { edits.put(key(bx,by), hotbar[selected]); score++; } }
+                  float clamp(float v) { return Math.max(-1, Math.min(1, v)); }
+                  float daylight() { return Math.max(0.24f, Math.min(1f, 0.58f + 0.5f*(float)Math.sin(day*6.283f))); }
+
+                  Hit ray(float a, float max) {
+                      Hit out = new Hit(); float ox = px, oy = py;
+                      for (float d=0.08f; d<max; d+=0.035f) {
+                          int bx = (int)Math.floor(ox + Math.cos(a)*d); int by = (int)Math.floor(oy + Math.sin(a)*d); int b = block(bx,by);
+                          if (b != 0) { out.hit=true; out.x=bx; out.y=by; out.block=b; out.dist=d; out.side = Math.abs((ox+Math.cos(a)*d)-bx-.5f) > Math.abs((oy+Math.sin(a)*d)-by-.5f) ? 1 : 0; return out; }
+                      }
+                      return out;
+                  }
+
+                  boolean solid(int x, int y) { int b = block(x,y); return b != 0 && b != 7 && b != 9; }
+                  int block(int x, int y) {
+                      Integer e = edits.get(key(x,y)); if (e != null) return e;
+                      int hash = x*73428767 ^ y*9122719 ^ 1337;
+                      int v = Math.abs(hash ^ (hash>>13));
+                      double n = Math.sin(x*0.22) + Math.cos(y*0.19) + Math.sin((x+y)*0.09);
+                      if (Math.abs(x) < 2 && Math.abs(y) < 2) return 0;
+                      if (n > 1.25) return v%9==0 ? 8 : 3;
+                      if (n > 0.74) return v%7==0 ? 4 : 1;
+                      if (n < -1.35) return 7;
+                      if (v%31==0) return 5;
+                      if (v%29==0) return 6;
+                      if (v%23==0) return 4;
+                      return 0;
+                  }
+
+                  long key(int x, int y) { return (((long)x) << 32) ^ (y & 0xffffffffL); }
+                  int blockColor(int b, float l) {
+                      int base;
+                      switch (b) { case 1: base=Color.rgb(75,175,70); break; case 2: base=Color.rgb(110,80,45); break; case 3: base=Color.rgb(115,118,124); break; case 4: base=Color.rgb(130,85,45); break; case 5: base=Color.rgb(65,155,70); break; case 6: base=Color.rgb(215,195,120); break; case 7: base=Color.rgb(60,130,220); break; case 8: base=Color.rgb(70,120,165); break; case 9: base=Color.rgb(255,195,70); break; default: base=Color.rgb(200,200,200); }
+                      l = Math.max(.18f, Math.min(1.15f, l)); return Color.rgb(Math.min(255,(int)(Color.red(base)*l)), Math.min(255,(int)(Color.green(base)*l)), Math.min(255,(int)(Color.blue(base)*l)));
+                  }
+                  int shade(int col, float dist, int side) { float s = Math.max(.20f, 1f/(1f+dist*0.075f)); if (side==1) s*=0.82f; return Color.rgb((int)(Color.red(col)*s), (int)(Color.green(col)*s), (int)(Color.blue(col)*s)); }
+                  static class Hit { boolean hit; int x,y,block,side; float dist; }
+              }
+          }
+          EOF2
+
+          # Add about 2.5 MB of original random asset data so the APK is a few MB, not tiny.
+          dd if=/dev/urandom of=VoxelForge3D/app/src/main/assets/world_texture_pack.bin bs=1024 count=2560 status=none
+
+      - name: Build direct APK
+        run: gradle -p VoxelForge3D :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload direct APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BIG-3D-VoxelForge-apk
+          path: VoxelForge3D/app/build/outputs/apk/debug/*.apk

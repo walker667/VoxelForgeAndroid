@@ -1,0 +1,618 @@
+name: BUILD V4 CUBECRAFT STYLE VOXEL APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android packages
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Create V4 voxel Android project
+        run: |
+          rm -rf VoxelForgeV4
+          mkdir -p VoxelForgeV4/app/src/main/java/com/voxelforge/v4
+          mkdir -p VoxelForgeV4/app/src/main/res/values
+
+          cat > VoxelForgeV4/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "VoxelForgeV4"
+          include ":app"
+          EOF
+
+          cat > VoxelForgeV4/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > VoxelForgeV4/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'com.voxelforge.v4'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.voxelforge.v4'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 4
+                  versionName '4.0'
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > VoxelForgeV4/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar">
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:windowActionBar">false</item>
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowContentOverlay">@null</item>
+                  <item name="android:windowDisablePreview">true</item>
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#ffdd44</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > VoxelForgeV4/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:theme="@style/AppTheme"
+                  android:label="VoxelForge V4"
+                  android:allowBackup="false"
+                  android:supportsRtl="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="landscape"
+                      android:configChanges="keyboard|keyboardHidden|orientation|screenSize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > VoxelForgeV4/app/src/main/java/com/voxelforge/v4/MainActivity.java <<'JAVA'
+          package com.voxelforge.v4;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.graphics.Bitmap;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.opengl.GLES20;
+          import android.opengl.GLSurfaceView;
+          import android.opengl.GLUtils;
+          import android.opengl.Matrix;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.widget.Button;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import java.nio.ByteBuffer;
+          import java.nio.ByteOrder;
+          import java.nio.FloatBuffer;
+          import java.util.ArrayList;
+          import java.util.List;
+          import java.util.Random;
+          import javax.microedition.khronos.egl.EGLConfig;
+          import javax.microedition.khronos.opengles.GL10;
+
+          public class MainActivity extends Activity {
+              private VoxelRenderer renderer;
+              private GameView gameView;
+              private TextView hud;
+              private Handler handler = new Handler(Looper.getMainLooper());
+              private final Runnable updateHud = new Runnable() {
+                  @Override public void run() {
+                      if (renderer != null && hud != null) {
+                          hud.setText("VoxelForge V4   FPS " + renderer.fps + "   X:" + (int)renderer.camX +
+                                  " Y:" + (int)renderer.camY + " Z:" + (int)renderer.camZ +
+                                  "   Blocks:" + renderer.blockCount);
+                      }
+                      handler.postDelayed(this, 350);
+                  }
+              };
+
+              @Override protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                  hideBars();
+
+                  FrameLayout root = new FrameLayout(this);
+                  renderer = new VoxelRenderer();
+                  gameView = new GameView(this, renderer);
+                  gameView.setEGLContextClientVersion(2);
+                  gameView.setPreserveEGLContextOnPause(true);
+                  gameView.setRenderer(renderer);
+                  gameView.setRenderMode(GLSurfaceView.RENDERMODE_CONTINUOUSLY);
+                  root.addView(gameView, new FrameLayout.LayoutParams(-1, -1));
+
+                  hud = label("VoxelForge V4", 12, Color.WHITE);
+                  hud.setShadowLayer(4, 2, 2, Color.BLACK);
+                  FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(-2, dp(28));
+                  hp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                  hp.topMargin = dp(8);
+                  root.addView(hud, hp);
+
+                  TextView leftTip = label("MOVE", 11, 0xCCFFFFFF);
+                  FrameLayout.LayoutParams ltp = new FrameLayout.LayoutParams(dp(130), dp(28));
+                  ltp.gravity = Gravity.LEFT | Gravity.BOTTOM;
+                  ltp.leftMargin = dp(25);
+                  ltp.bottomMargin = dp(116);
+                  root.addView(leftTip, ltp);
+
+                  View joy = new View(this);
+                  GradientDrawable joyBg = new GradientDrawable();
+                  joyBg.setShape(GradientDrawable.OVAL);
+                  joyBg.setColor(0x55FFFFFF);
+                  joyBg.setStroke(dp(2), 0xCCFFFFFF);
+                  joy.setBackground(joyBg);
+                  FrameLayout.LayoutParams jp = new FrameLayout.LayoutParams(dp(95), dp(95));
+                  jp.gravity = Gravity.LEFT | Gravity.BOTTOM;
+                  jp.leftMargin = dp(28);
+                  jp.bottomMargin = dp(28);
+                  root.addView(joy, jp);
+
+                  Button jump = btn("JUMP", 0xAA333333);
+                  Button brk = btn("BREAK", 0xCCB8372F);
+                  Button place = btn("PLACE", 0xCC1A763A);
+                  FrameLayout.LayoutParams jumpP = new FrameLayout.LayoutParams(dp(76), dp(56));
+                  jumpP.gravity = Gravity.RIGHT | Gravity.BOTTOM; jumpP.rightMargin = dp(108); jumpP.bottomMargin = dp(78);
+                  FrameLayout.LayoutParams breakP = new FrameLayout.LayoutParams(dp(86), dp(58));
+                  breakP.gravity = Gravity.RIGHT | Gravity.BOTTOM; breakP.rightMargin = dp(116); breakP.bottomMargin = dp(18);
+                  FrameLayout.LayoutParams placeP = new FrameLayout.LayoutParams(dp(86), dp(58));
+                  placeP.gravity = Gravity.RIGHT | Gravity.BOTTOM; placeP.rightMargin = dp(22); placeP.bottomMargin = dp(18);
+                  root.addView(jump, jumpP); root.addView(brk, breakP); root.addView(place, placeP);
+
+                  jump.setOnClickListener(v -> gameView.queueEvent(() -> renderer.jump()));
+                  brk.setOnClickListener(v -> gameView.queueEvent(() -> renderer.breakTarget()));
+                  place.setOnClickListener(v -> gameView.queueEvent(() -> renderer.placeTarget()));
+
+                  LinearLayout hotbar = new LinearLayout(this);
+                  hotbar.setGravity(Gravity.CENTER);
+                  hotbar.setOrientation(LinearLayout.HORIZONTAL);
+                  int[] names = {1,2,3,4,6,7,8,5};
+                  String[] labels = {"GRASS","DIRT","STONE","SAND","WOOD","LEAF","ORE","WATER"};
+                  for (int i=0;i<names.length;i++) {
+                      final int block = names[i];
+                      Button hb = btn(labels[i], 0xAA222222);
+                      hb.setTextSize(9);
+                      LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(58), dp(48));
+                      p.setMargins(dp(4), 0, dp(4), 0);
+                      hotbar.addView(hb, p);
+                      hb.setOnClickListener(v -> gameView.queueEvent(() -> renderer.selected = block));
+                  }
+                  FrameLayout.LayoutParams hotP = new FrameLayout.LayoutParams(-2, dp(56));
+                  hotP.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
+                  hotP.bottomMargin = dp(10);
+                  root.addView(hotbar, hotP);
+
+                  TextView note = label("Original block sandbox style - no Minecraft/CubeCraft assets used", 10, 0xCCFFFFFF);
+                  FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-2, dp(24));
+                  np.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+                  np.topMargin = dp(32);
+                  root.addView(note, np);
+
+                  setContentView(root);
+                  handler.post(updateHud);
+              }
+
+              @Override protected void onResume() { super.onResume(); hideBars(); gameView.onResume(); }
+              @Override protected void onPause() { super.onPause(); gameView.onPause(); }
+              @Override public void onWindowFocusChanged(boolean hasFocus) { super.onWindowFocusChanged(hasFocus); if (hasFocus) hideBars(); }
+
+              private void hideBars() {
+                  getWindow().getDecorView().setSystemUiVisibility(
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+                          View.SYSTEM_UI_FLAG_FULLSCREEN |
+                          View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                          View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                          View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                          View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+              }
+
+              private TextView label(String s, int size, int color) {
+                  TextView t = new TextView(this);
+                  t.setText(s); t.setTextColor(color); t.setTextSize(size);
+                  t.setTypeface(Typeface.DEFAULT_BOLD); t.setGravity(Gravity.CENTER);
+                  return t;
+              }
+
+              private Button btn(String s, int bg) {
+                  Button b = new Button(this);
+                  b.setText(s);
+                  b.setTextColor(Color.WHITE);
+                  b.setTypeface(Typeface.DEFAULT_BOLD);
+                  b.setAllCaps(false);
+                  GradientDrawable g = new GradientDrawable();
+                  g.setColor(bg);
+                  g.setCornerRadius(dp(8));
+                  g.setStroke(dp(2), 0x55FFFFFF);
+                  b.setBackground(g);
+                  b.setPadding(2,2,2,2);
+                  return b;
+              }
+
+              private int dp(int v) { return (int)(v * getResources().getDisplayMetrics().density + 0.5f); }
+
+              public static class GameView extends GLSurfaceView {
+                  private final VoxelRenderer r;
+                  private int leftId = -1, lookId = -1;
+                  private float leftCx, leftCy, lastLookX, lastLookY;
+
+                  public GameView(Activity a, VoxelRenderer renderer) { super(a); this.r = renderer; }
+
+                  @Override public boolean onTouchEvent(MotionEvent e) {
+                      int action = e.getActionMasked();
+                      int index = e.getActionIndex();
+                      if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
+                          int id = e.getPointerId(index);
+                          float x = e.getX(index), y = e.getY(index);
+                          if (x < getWidth()*0.42f && y > getHeight()*0.22f && leftId < 0) {
+                              leftId = id; leftCx = x; leftCy = y;
+                          } else if (lookId < 0) {
+                              lookId = id; lastLookX = x; lastLookY = y;
+                          }
+                      } else if (action == MotionEvent.ACTION_MOVE) {
+                          for (int i=0;i<e.getPointerCount();i++) {
+                              int id = e.getPointerId(i);
+                              float x = e.getX(i), y = e.getY(i);
+                              if (id == leftId) {
+                                  float dx = (x-leftCx)/110f;
+                                  float dy = (y-leftCy)/110f;
+                                  float len = (float)Math.sqrt(dx*dx + dy*dy);
+                                  if (len > 1f) { dx /= len; dy /= len; }
+                                  r.setMove(-dy, dx);
+                              } else if (id == lookId) {
+                                  float dx = x-lastLookX, dy = y-lastLookY;
+                                  lastLookX = x; lastLookY = y;
+                                  r.addLook(dx, dy);
+                              }
+                          }
+                      } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_CANCEL) {
+                          int id = e.getPointerId(index);
+                          if (id == leftId) { leftId = -1; r.setMove(0,0); }
+                          if (id == lookId) { lookId = -1; }
+                          if (action == MotionEvent.ACTION_CANCEL) { leftId = -1; lookId = -1; r.setMove(0,0); }
+                      }
+                      return true;
+                  }
+              }
+
+              public static class VoxelRenderer implements GLSurfaceView.Renderer {
+                  static final int W=64, H=28, D=64;
+                  static final byte AIR=0, GRASS=1, DIRT=2, STONE=3, SAND=4, WATER=5, WOOD=6, LEAF=7, ORE=8;
+                  byte[][][] world = new byte[W][H][D];
+                  int[][] heights = new int[W][D];
+                  FloatBuffer mesh;
+                  int vertexCount=0, program, texId;
+                  int selected = GRASS;
+                  float camX = 32, camY = 16, camZ = 48;
+                  float yaw = 0.55f, pitch = -0.18f;
+                  float forward=0, strafe=0, vy=0;
+                  long last = System.nanoTime(), fpsLast=System.nanoTime();
+                  int frames=0, fps=0, blockCount=0;
+                  float[] proj = new float[16], view = new float[16], vp = new float[16];
+
+                  @Override public void onSurfaceCreated(GL10 gl, EGLConfig cfg) {
+                      GLES20.glClearColor(0.50f,0.72f,0.95f,1f);
+                      GLES20.glEnable(GLES20.GL_DEPTH_TEST);
+                      GLES20.glEnable(GLES20.GL_BLEND);
+                      GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA);
+                      program = makeProgram(VERT, FRAG);
+                      texId = makeAtlas();
+                      generateWorld(2028);
+                      rebuildMesh();
+                  }
+
+                  @Override public void onSurfaceChanged(GL10 gl, int w, int h) {
+                      GLES20.glViewport(0,0,w,h);
+                      Matrix.perspectiveM(proj,0,68f, w/(float)Math.max(1,h), 0.06f, 92f);
+                  }
+
+                  @Override public void onDrawFrame(GL10 gl) {
+                      long now = System.nanoTime();
+                      float dt = Math.min(0.05f, (now-last)/1_000_000_000f);
+                      last = now;
+                      update(dt);
+                      float day = (float)((Math.sin(now/9_000_000_000.0)+1.0)*0.5);
+                      GLES20.glClearColor(0.32f + 0.22f*day, 0.52f + 0.18f*day, 0.80f + 0.13f*day, 1f);
+                      GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT | GLES20.GL_DEPTH_BUFFER_BIT);
+                      draw();
+                      frames++;
+                      if (now-fpsLast > 1_000_000_000L) { fps=frames; frames=0; fpsLast=now; }
+                  }
+
+                  void update(float dt) {
+                      float speed = 6.2f;
+                      float fx = (float)Math.sin(yaw), fz = -(float)Math.cos(yaw);
+                      float rx = (float)Math.cos(yaw), rz = (float)Math.sin(yaw);
+                      float nx = camX + (fx*forward + rx*strafe) * speed * dt;
+                      float nz = camZ + (fz*forward + rz*strafe) * speed * dt;
+                      if (nx > 2 && nx < W-3 && nz > 2 && nz < D-3) { camX = nx; camZ = nz; }
+                      vy -= 20f*dt;
+                      camY += vy*dt;
+                      float ground = groundHeight((int)camX,(int)camZ) + 1.75f;
+                      if (camY < ground) { camY = ground; vy = 0; }
+                      if (camY > H-2) { camY = H-2; vy = 0; }
+                  }
+
+                  void setMove(float f, float s) { forward=f; strafe=s; }
+                  void addLook(float dx, float dy) {
+                      yaw -= dx * 0.0052f;
+                      pitch -= dy * 0.0042f;
+                      if (pitch > 1.15f) pitch = 1.15f;
+                      if (pitch < -1.15f) pitch = -1.15f;
+                  }
+                  void jump() { if (Math.abs(camY-(groundHeight((int)camX,(int)camZ)+1.75f)) < 0.07f) vy = 7.6f; }
+
+                  int groundHeight(int x, int z) {
+                      x=Math.max(0,Math.min(W-1,x)); z=Math.max(0,Math.min(D-1,z));
+                      for (int y=H-1;y>=0;y--) {
+                          byte b = world[x][y][z];
+                          if (b!=AIR && b!=WATER) return y;
+                      }
+                      return 1;
+                  }
+
+                  void generateWorld(int seed) {
+                      Random r = new Random(seed);
+                      int sea=7;
+                      for (int x=0;x<W;x++) for (int z=0;z<D;z++) {
+                          float n = (float)(Math.sin(x*0.18)+Math.cos(z*0.16)+0.55*Math.sin((x+z)*0.09)+0.4*Math.cos((x-z)*0.13));
+                          int h = 8 + (int)(n*2.2f);
+                          float beach = Math.abs(z - D*0.67f);
+                          if (beach < 12) h = Math.min(h, sea + (int)(beach/5));
+                          h = Math.max(3, Math.min(H-6,h));
+                          heights[x][z]=h;
+                          for (int y=0;y<H;y++) {
+                              if (y <= h) {
+                                  if (y==h) world[x][y][z] = (h<=sea+1 || beach<13) ? SAND : GRASS;
+                                  else if (y > h-4) world[x][y][z] = DIRT;
+                                  else world[x][y][z] = (r.nextInt(34)==0 && y<8) ? ORE : STONE;
+                              } else if (y <= sea) world[x][y][z] = WATER;
+                          }
+                      }
+                      // Chunky original trees, placed away from spawn and beach.
+                      for (int i=0;i<90;i++) {
+                          int x=4+r.nextInt(W-8), z=4+r.nextInt(D-18);
+                          int y=groundHeight(x,z);
+                          if (world[x][y][z]==GRASS && Math.abs(x-32)+Math.abs(z-48)>12) addTree(x,y+1,z,r);
+                      }
+                      camX=32; camZ=47; camY=groundHeight(32,47)+2.1f;
+                  }
+
+                  void addTree(int x,int y,int z,Random r) {
+                      int tall = 4+r.nextInt(3);
+                      for (int i=0;i<tall && y+i<H;i++) world[x][y+i][z]=WOOD;
+                      int top=y+tall;
+                      for (int dx=-2;dx<=2;dx++) for (int dz=-2;dz<=2;dz++) for (int dy=-2;dy<=1;dy++) {
+                          int ax=x+dx, ay=top+dy, az=z+dz;
+                          if (ax<1||az<1||ax>=W-1||az>=D-1||ay<1||ay>=H) continue;
+                          if (Math.abs(dx)+Math.abs(dz)+Math.max(0,dy) < 5 && world[ax][ay][az]==AIR) world[ax][ay][az]=LEAF;
+                      }
+                  }
+
+                  void rebuildMesh() {
+                      List<Float> out = new ArrayList<>(400000);
+                      blockCount=0;
+                      for (int x=0;x<W;x++) for (int y=0;y<H;y++) for (int z=0;z<D;z++) {
+                          byte b = world[x][y][z];
+                          if (b==AIR) continue;
+                          blockCount++;
+                          for (int d=0; d<6; d++) {
+                              int nx=x+DX[d], ny=y+DY[d], nz=z+DZ[d];
+                              byte nb = (nx<0||ny<0||nz<0||nx>=W||ny>=H||nz>=D) ? AIR : world[nx][ny][nz];
+                              if (nb==AIR || (b!=WATER && nb==WATER)) addFace(out,x,y,z,b,d);
+                          }
+                      }
+                      float[] arr = new float[out.size()];
+                      for (int i=0;i<out.size();i++) arr[i]=out.get(i);
+                      vertexCount = arr.length/6;
+                      mesh = ByteBuffer.allocateDirect(arr.length*4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+                      mesh.put(arr).position(0);
+                  }
+
+                  static final int[] DX={1,-1,0,0,0,0}, DY={0,0,1,-1,0,0}, DZ={0,0,0,0,1,-1};
+
+                  void addFace(List<Float> o,int x,int y,int z,byte b,int dir) {
+                      float[][] p;
+                      if (dir==0) p=new float[][]{{x+1,y,z},{x+1,y+1,z},{x+1,y+1,z+1},{x+1,y,z+1}};
+                      else if (dir==1) p=new float[][]{{x,y,z+1},{x,y+1,z+1},{x,y+1,z},{x,y,z}};
+                      else if (dir==2) p=new float[][]{{x,y+1,z+1},{x+1,y+1,z+1},{x+1,y+1,z},{x,y+1,z}};
+                      else if (dir==3) p=new float[][]{{x,y,z},{x+1,y,z},{x+1,y,z+1},{x,y,z+1}};
+                      else if (dir==4) p=new float[][]{{x+1,y,z+1},{x+1,y+1,z+1},{x,y+1,z+1},{x,y,z+1}};
+                      else p=new float[][]{{x,y,z},{x,y+1,z},{x+1,y+1,z},{x+1,y,z}};
+                      int tile = tileFor(b,dir);
+                      float c=1f/4f, pad=0.004f, u0=(tile%4)*c+pad, v0=(tile/4)*c+pad, u1=u0+c-pad*2, v1=v0+c-pad*2;
+                      float light = (dir==2)?1.0f:(dir==3?0.55f:(dir==0?0.82f:(dir==1?0.72f:0.76f)));
+                      if (b==WATER) light=0.88f;
+                      float[][] uv={{u0,v1},{u0,v0},{u1,v0},{u1,v1}};
+                      addVert(o,p[0],uv[0],light); addVert(o,p[1],uv[1],light); addVert(o,p[2],uv[2],light);
+                      addVert(o,p[0],uv[0],light); addVert(o,p[2],uv[2],light); addVert(o,p[3],uv[3],light);
+                  }
+
+                  int tileFor(byte b,int dir) {
+                      if (b==GRASS) return dir==2?0:(dir==3?2:1);
+                      if (b==DIRT) return 2;
+                      if (b==STONE) return 3;
+                      if (b==SAND) return 4;
+                      if (b==WATER) return 5;
+                      if (b==WOOD) return dir==2||dir==3?10:6;
+                      if (b==LEAF) return 7;
+                      if (b==ORE) return 8;
+                      return 9;
+                  }
+
+                  void addVert(List<Float> o,float[] p,float[] uv,float l) {
+                      o.add(p[0]); o.add(p[1]); o.add(p[2]); o.add(uv[0]); o.add(uv[1]); o.add(l);
+                  }
+
+                  void draw() {
+                      float cp=(float)Math.cos(pitch), sx=(float)Math.sin(yaw)*cp, sy=(float)Math.sin(pitch), sz=-(float)Math.cos(yaw)*cp;
+                      Matrix.setLookAtM(view,0, camX,camY,camZ, camX+sx,camY+sy,camZ+sz, 0,1,0);
+                      Matrix.multiplyMM(vp,0,proj,0,view,0);
+                      GLES20.glUseProgram(program);
+                      int aPos=GLES20.glGetAttribLocation(program,"aPos");
+                      int aUV=GLES20.glGetAttribLocation(program,"aUV");
+                      int aLight=GLES20.glGetAttribLocation(program,"aLight");
+                      int uMVP=GLES20.glGetUniformLocation(program,"uMVP");
+                      int uTex=GLES20.glGetUniformLocation(program,"uTex");
+                      int uCam=GLES20.glGetUniformLocation(program,"uCam");
+                      GLES20.glUniformMatrix4fv(uMVP,1,false,vp,0);
+                      GLES20.glUniform3f(uCam,camX,camY,camZ);
+                      GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+                      GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId);
+                      GLES20.glUniform1i(uTex,0);
+                      mesh.position(0);
+                      GLES20.glVertexAttribPointer(aPos,3,GLES20.GL_FLOAT,false,24,mesh);
+                      GLES20.glEnableVertexAttribArray(aPos);
+                      mesh.position(3);
+                      GLES20.glVertexAttribPointer(aUV,2,GLES20.GL_FLOAT,false,24,mesh);
+                      GLES20.glEnableVertexAttribArray(aUV);
+                      mesh.position(5);
+                      GLES20.glVertexAttribPointer(aLight,1,GLES20.GL_FLOAT,false,24,mesh);
+                      GLES20.glEnableVertexAttribArray(aLight);
+                      GLES20.glDrawArrays(GLES20.GL_TRIANGLES,0,vertexCount);
+                  }
+
+                  void breakTarget() {
+                      int[] hit = ray(false);
+                      if (hit != null) { world[hit[0]][hit[1]][hit[2]]=AIR; rebuildMesh(); }
+                  }
+                  void placeTarget() {
+                      int[] pos = ray(true);
+                      if (pos != null && selected!=0) { world[pos[0]][pos[1]][pos[2]]=(byte)selected; rebuildMesh(); }
+                  }
+                  int[] ray(boolean place) {
+                      float cp=(float)Math.cos(pitch), dx=(float)Math.sin(yaw)*cp, dy=(float)Math.sin(pitch), dz=-(float)Math.cos(yaw)*cp;
+                      int lastX=(int)camX,lastY=(int)camY,lastZ=(int)camZ;
+                      for (float t=0.2f;t<7f;t+=0.09f) {
+                          int x=(int)Math.floor(camX+dx*t), y=(int)Math.floor(camY+dy*t), z=(int)Math.floor(camZ+dz*t);
+                          if (x<1||y<1||z<1||x>=W-1||y>=H-1||z>=D-1) continue;
+                          if (world[x][y][z]!=AIR && world[x][y][z]!=WATER) {
+                              return place ? new int[]{lastX,lastY,lastZ} : new int[]{x,y,z};
+                          }
+                          lastX=x; lastY=y; lastZ=z;
+                      }
+                      return null;
+                  }
+
+                  int makeAtlas() {
+                      Bitmap bmp = Bitmap.createBitmap(256,256,Bitmap.Config.ARGB_8888);
+                      for (int tile=0; tile<16; tile++) paintTile(bmp,tile);
+                      int[] id=new int[1]; GLES20.glGenTextures(1,id,0);
+                      GLES20.glBindTexture(GLES20.GL_TEXTURE_2D,id[0]);
+                      GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_MIN_FILTER,GLES20.GL_NEAREST);
+                      GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_MAG_FILTER,GLES20.GL_NEAREST);
+                      GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_WRAP_S,GLES20.GL_CLAMP_TO_EDGE);
+                      GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D,GLES20.GL_TEXTURE_WRAP_T,GLES20.GL_CLAMP_TO_EDGE);
+                      GLUtils.texImage2D(GLES20.GL_TEXTURE_2D,0,bmp,0);
+                      bmp.recycle();
+                      return id[0];
+                  }
+
+                  void paintTile(Bitmap b,int tile) {
+                      int ox=(tile%4)*64, oy=(tile/4)*64;
+                      Random r = new Random(tile*999+5);
+                      int base;
+                      switch(tile) {
+                          case 0: base=Color.rgb(56,181,62); break;       // grass top
+                          case 1: base=Color.rgb(77,154,54); break;       // grass side
+                          case 2: base=Color.rgb(112,77,44); break;       // dirt
+                          case 3: base=Color.rgb(118,121,126); break;     // stone
+                          case 4: base=Color.rgb(209,189,121); break;     // sand
+                          case 5: base=Color.argb(190,55,145,220); break; // water
+                          case 6: base=Color.rgb(128,78,38); break;       // wood side
+                          case 7: base=Color.rgb(45,145,59); break;       // leaves
+                          case 8: base=Color.rgb(110,110,116); break;     // ore
+                          case 10: base=Color.rgb(155,102,54); break;     // wood top
+                          default: base=Color.rgb(178,143,76);
+                      }
+                      for(int y=0;y<64;y++) for(int x=0;x<64;x++) {
+                          int noise = r.nextInt(34)-16;
+                          int rr=cl(Color.red(base)+noise), gg=cl(Color.green(base)+noise), bb=cl(Color.blue(base)+noise);
+                          if (tile==1 && y<16) { rr=52+r.nextInt(25); gg=155+r.nextInt(65); bb=50+r.nextInt(30); }
+                          if (tile==6 && (x%16==0 || x%16==1)) { rr-=35; gg-=25; bb-=15; }
+                          if (tile==3 && (x+y)%17==0) { rr+=30; gg+=30; bb+=30; }
+                          if (tile==7 && r.nextInt(9)==0) { rr+=25; gg+=45; bb+=15; }
+                          if (tile==8 && r.nextInt(22)==0) { rr=255; gg=198; bb=64; }
+                          if (tile==10) {
+                              int d=(int)Math.abs(Math.hypot(x-32,y-32)%13);
+                              rr=cl(rr + (d<2?35:-8)); gg=cl(gg + (d<2?25:-4)); bb=cl(bb + (d<2?10:0));
+                          }
+                          b.setPixel(ox+x,oy+y,Color.argb(Color.alpha(base),cl(rr),cl(gg),cl(bb)));
+                      }
+                  }
+                  int cl(int v){ return Math.max(0,Math.min(255,v)); }
+
+                  int makeProgram(String vs,String fs) {
+                      int v=shader(GLES20.GL_VERTEX_SHADER,vs), f=shader(GLES20.GL_FRAGMENT_SHADER,fs);
+                      int p=GLES20.glCreateProgram(); GLES20.glAttachShader(p,v); GLES20.glAttachShader(p,f); GLES20.glLinkProgram(p);
+                      return p;
+                  }
+                  int shader(int type,String s) { int sh=GLES20.glCreateShader(type); GLES20.glShaderSource(sh,s); GLES20.glCompileShader(sh); return sh; }
+
+                  static final String VERT =
+                          "attribute vec3 aPos;attribute vec2 aUV;attribute float aLight;uniform mat4 uMVP;uniform vec3 uCam;varying vec2 vUV;varying float vLight;varying float vFog;void main(){gl_Position=uMVP*vec4(aPos,1.0);vUV=aUV;vLight=aLight;float d=distance(aPos,uCam);vFog=smoothstep(38.0,86.0,d);}";
+                  static final String FRAG =
+                          "precision mediump float;uniform sampler2D uTex;varying vec2 vUV;varying float vLight;varying float vFog;void main(){vec4 c=texture2D(uTex,vUV);vec3 lit=c.rgb*vLight;vec3 sky=vec3(0.58,0.76,0.95);gl_FragColor=vec4(mix(lit,sky,vFog),c.a);}";
+              }
+          }
+          JAVA
+
+      - name: Build V4 APK
+        run: |
+          cd VoxelForgeV4
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload V4 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoxelForge-V4-CubeStyle-apk
+          path: VoxelForgeV4/app/build/outputs/apk/debug/*.apk
